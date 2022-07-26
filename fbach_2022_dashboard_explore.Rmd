@@ -1,0 +1,611 @@
+---
+title: "Fantasy Bachelorette 2022"
+output: 
+  flexdashboard::flex_dashboard:
+    orientation: columns
+    vertical_layout: fill
+runtime: shiny
+---
+
+```{r setup, include=FALSE}
+library(flexdashboard)
+library(tidyverse)
+library(plotly)
+library(ggtext)
+library(glue)
+library(shiny)
+```
+
+```{r global, include = FALSE}
+
+# load data
+  # sheet 1: includes each team, their picks, and their points
+  df.teams <- readxl::read_excel("Fantasy Bachelorette, 2022.xlsx")
+  
+  # sheet 2: includes the bachelorette contestants and their points per week
+  df.scores <- readxl::read_excel("Fantasy Bachelorette, 2022.xlsx", sheet = 2)
+  
+  # manually  track who was eliminated and when
+  # "eliminated" column is the week they were eliminated (as an integer),
+    # or 999 if not yet eliminated
+  df.elim <- data.frame(pick = df.scores$Participant,
+                      eliminated = 999)
+  elim.wk1 <- c("Roby", "Joey", "Justin Y.")
+  elim.wk2 <- c("Brandan", "Chris", "Colin", "John", " Jordan V.", "Justin B.",
+                "Matt", "Ryan")
+  # 2 column df, bachelorette contestant name, week they were eliminated
+  df.elim <- df.elim %>%
+    mutate(eliminated = case_when(
+      pick %in% elim.wk1 ~ 1,
+      pick %in% elim.wk2 ~ 2,
+      TRUE ~ eliminated
+    ))
+  
+# clean and prep team data
+  # get long df of each person's team
+  # 2 cols: person, pick
+  # 6 rows per person (1 for each of their 6 picks)
+  df <- df.teams %>%
+    select(!matches("\\.\\.\\d*")) %>% # get rid of columns in between names
+    slice_head(n = 6) %>% # keep the 6 picks, delete the Total row
+    pivot_longer(cols = everything(), names_to = "person", values_to = "pick") %>%
+    arrange(person)
+
+  # merge in weekly (and total) scores per bachelorette contestant (pick)
+  df2 <- df %>% # naming variables is hard
+    left_join(df.scores, by = c("pick" = "Participant"))
+
+  # create df of total score per team, add rank for each person
+  team.scores <- df2 %>%
+    group_by(person) %>%
+    summarise(score = sum(Total)) %>%
+    arrange(-score) %>%
+    mutate(rank = rank(-score, ties.method = "min"))
+  
+  # sort contestants from high score to low score (total score)
+  # "bguys" is the bachelorette contestants, for short
+  bguys.order <- fct_reorder(df.scores$Participant, df.scores$Total)
+
+  # sort team scores from high to low total score
+  team.order <- fct_reorder(team.scores$person, team.scores$score)
+
+  # create main df: 
+    # long version of df2 (1 row per person/pick/week)
+    # merge in elimination week data
+  df2l <- df2 %>%
+    pivot_longer(-c(person, pick, Total), names_to = "week", values_to = "score") %>%
+    left_join(df.elim) %>%
+    mutate(pick = factor(pick, levels = levels(bguys.order)),
+           person = factor(person, levels = team.order),
+           wk_index = as.numeric(str_extract(week, "\\d"))) %>%
+    drop_na(score) # drop weeks that haven't happened yet (or person eliminated)
+
+
+# define certain useful values like the max score, number of weeks so far
+max.bguy.score <- max(df.scores$Total)
+max.team.score <- max(team.scores$score)
+
+week.list <- df2l %>%
+  drop_na(score) %>%
+  pull(week) %>%
+  unique()
+
+# colors to use for plotting
+  # named vector so can have consistent color per week
+  # I think there are more than 9 weeks so I'll have to update this
+  # chose some color palette I found online that seemed OK for now
+colors9 <- c("#fd7f6f", "#7eb0d5", "#b2e061", "#bd7ebe", "#ffb55a", "#ffee65", "#beb9db", "#fdcce5", "#8bd3c7")
+names(colors9) <- paste("Week", 1:9)
+
+
+# old "pretty" plot data prep ####
+temp.wk1 <- df.scores %>%
+  select(pick = Participant, Total = `Week 1`)
+
+pick.count <- df %>%
+  count(pick) %>% 
+  right_join(temp.wk1) 
+
+df.pick <- pick.count %>%
+  mutate(n = replace_na(n, 0.04),
+         label = case_when(
+           Total == max(Total) ~ "Top Scorer",
+           Total == 0 ~ "Eliminated",
+           TRUE ~ "Still Around"
+         ),
+         label2 = paste0(label, " (", Total, " points)"),
+         font_face = ifelse(label == "Top Scorer", "bold", "plain"),
+         font_color = ifelse(label == "Eliminated", "gray50", "black"),
+         pick.temp = ifelse(label == "Top Scorer", paste0("**", pick, "**"), pick),
+         # pick.temp = ifelse(label == "Eliminated",  paste0("~~", pick, "~~"), pick),
+         pick.label = glue("<span style='color:{font_color}'>{pick.temp}</span>"))
+
+
+```
+
+```{r reactive}
+
+# define reactive elements for shiny
+  # page 1: the 2 isoalted team plots + how many weeks to show
+  person1 <- reactive(input$person_select1)
+  person2 <- reactive(input$person_select2)
+  week_select <- reactive(input$week_select)
+  
+  # page 2: which team lines to show
+  people_select <- reactive(input$people_select)
+
+```
+
+
+# Bar Charts
+
+## Sidebar {.sidebar data-width=150}
+
+
+<!-- #### **Person 1** -->
+```{r personInput}
+
+# sidebar is the UI elemennt that contains the inputs for reactive stuff
+
+# dropdown for the top individual team plot
+selectInput(inputId = "person_select1",
+            label = "Person 1",
+            choices = sort(as.character(team.order)),
+            selected = team.order[1],
+            selectize = FALSE,
+            )
+
+# dropdown for the bottom individual team plot
+selectInput(inputId = "person_select2",
+            label = "Person 2",
+            choices = sort(as.character(team.order)),
+            selected = team.order[2],
+            selectize = FALSE,
+            )
+
+# selection box to pick any combination of weeks
+selectInput(inputId = "week_select",
+            label = "Weeks",
+            choices = week.list,
+            selected = week.list,
+            multiple = TRUE,
+            selectize = FALSE,
+            )
+
+```
+
+<!-- some example descriptive text, here just describes how to select multiple -->
+To select multiple weeks:<br>
+*shift+click* or<br>
+*cmd+click* (Mac) or<br>
+*ctrl+click* (Windows)<br><br>
+(default is all weeks)
+
+Column {data-width=500}
+-----------------------------------------------------------------------
+
+### Team 1
+
+```{r, fig.height = 5, fig.width = 10}
+
+# reactive elements need to go within a "render" function
+renderPlot({
+  
+  # get the ranking of the selected team 
+    # reactive input is called as a function, e.g. person1()
+    # will return the person (team) that is selected
+  temp <- team.scores %>%
+    filter(person == person1()) %>%
+    pull(rank)
+
+  # turn rank into a label to use in the plot text, e.g. 1st place, 4th place
+  rank.label <- paste(scales::ordinal(temp), "place")
+
+  # and "Tied for" if there is a tie for that ranking
+  if(sum(team.scores$rank == temp) > 1){
+    rank.label <- paste("Tied for", rank.label)
+  }
+
+  # get the team's score to use in the plot text
+  score.label <- team.scores %>%
+    filter(person == person1()) %>%
+    pull(score)
+
+  # bar plot of the points acquired by each of the team's pick
+    # with fill color mapped to week, week is reactive
+      # by default all weeks are selected (i.e. whole season so far)
+      # but can select individual weeks or some other subset
+    # horixontal bars so we can have the bguys names horizontal on y axis
+    # no legend, so that we don't repeat the legend for each plot on the page,
+      # because it is the same each time
+    # title with the person's name
+    # subtitle with their ranking and points
+  df2l %>%
+    filter(person == person1(),
+           week %in% week_select()) %>%
+  ggplot(aes(pick, score, fill = week)) +
+    geom_bar(stat = "identity", position = position_stack(reverse = TRUE)) +
+    coord_flip(ylim = c(0, max.bguy.score+5)) +
+    theme_bw() +
+    theme(legend.position = "none") +
+    scale_fill_manual(values = colors9) + 
+    labs(x = NULL,
+         y = "Score",
+         title = paste0(person1(), "'s Team"),
+         subtitle = paste(rank.label, "with", score.label, "points"))
+
+})
+
+
+
+# # for testing stuff out, replaces reactive parts with static
+#   temp <- team.scores %>%
+#   filter(person == team.order[1]) %>%
+#   pull(rank)
+# 
+#   rank.label <- paste(scales::ordinal(temp), "place")
+#   
+#   if(sum(team.scores$rank == temp) > 1){
+#     rank.label <- paste("Tied for", rank.label)
+#   }
+#   
+#   score.label <- team.scores %>%
+#     filter(person == team.order[1]) %>%
+#     pull(score)
+# 
+#   # looking at different color palettes
+#     # there is never anything I like
+#   colors.br <- RColorBrewer::brewer.pal("Set2", n = 12)
+#   
+#   RColorBrewer::display.brewer.pal("Blues", n = 5)
+#   RColorBrewer::display.brewer.pal("Oranges", n = 6)
+#   RColorBrewer::display.brewer.all()
+#   
+#   colors1 <- rev(RColorBrewer::brewer.pal("Blues", n = 5))
+#   colors2 <- rev(RColorBrewer::brewer.pal("Oranges", n = 6)[1:5])
+#   colors.BlO <- c(rbind(colors1, colors2))
+# 
+#   # some pastel paelette I found online
+#   colors9 <- c("#fd7f6f", "#7eb0d5", "#b2e061", "#bd7ebe", "#ffb55a", "#ffee65", "#beb9db", "#fdcce5", "#8bd3c7")
+#   names(colors9) <- paste("Week", 1:9)
+# 
+# df2l %>%
+#   mutate(week = factor(week)) %>%
+#   filter(person == team.order[1],
+#          week %in% "Week 2") %>%
+# ggplot(aes(pick, score, fill = week)) +
+#   geom_bar(stat = "identity", position = position_stack(reverse = TRUE)) +
+#   coord_flip(ylim = c(0, max.bguy.score+5)) +
+#   theme_bw() +
+#   theme(legend.title = element_blank()) +
+#   # scale_fill_brewer(type = "qual", palette = 3) +
+#   # scale_fill_manual(values = colors.BlO) +
+#   scale_fill_manual(values = colors9) +
+#   labs(x = NULL,
+#        y = "Score",
+#        title = paste0(team.order[1], "'s Team"),
+#        subtitle = paste(rank.label, "with", score.label, "points"))
+
+
+```
+
+
+### Team 2
+
+```{r fig.height = 5, fig.width = 10}
+
+
+
+# reactive elements need to go within a "render" function
+# same as Team 1 plot, except uses person2() instead of person1()
+# comments here may become out of date, see Team 1 version instead
+# actually I should probably make a function instead of copy-pasting the plot code
+renderPlot({
+  
+  # get the ranking of the selected team 
+    # reactive input is called as a function, e.g. person1()
+    # will return the person (team) that is selected
+  temp <- team.scores %>%
+    filter(person == person2()) %>%
+    pull(rank)
+
+  # turn rank into a label to use in the plot text, e.g. 1st place, 4th place
+  rank.label <- paste(scales::ordinal(temp), "place")
+
+  # and "Tied for" if there is a tie for that ranking
+  if(sum(team.scores$rank == temp) > 1){
+    rank.label <- paste("Tied for", rank.label)
+  }
+
+  # get the team's score to use in the plot text
+  score.label <- team.scores %>%
+    filter(person == person2()) %>%
+    pull(score)
+
+  # bar plot of the points acquired by each of the team's pick
+    # with fill color mapped to week, week is reactive
+      # by default all weeks are selected (i.e. whole season so far)
+      # but can select individual weeks or some other subset
+    # horixontal bars so we can have the bguys names horizontal on y axis
+    # no legend, so that we don't repeat the legend for each plot on the page,
+      # because it is the same each time
+    # title with the person's name
+    # subtitle with their ranking and points
+  df2l %>%
+    filter(person == person2(),
+           week %in% week_select()) %>%
+  ggplot(aes(pick, score, fill = week)) +
+    geom_bar(stat = "identity", position = position_stack(reverse = TRUE)) +
+    coord_flip(ylim = c(0, max.bguy.score+5)) +
+    theme_bw() +
+    theme(legend.position = "none") +
+    scale_fill_manual(values = colors9) + 
+    labs(x = NULL,
+         y = "Score",
+         title = paste0(person1(), "'s Team"),
+         subtitle = paste(rank.label, "with", score.label, "points"))
+
+})
+
+```
+
+### {data-height=65}
+```{r}
+
+# adds the legend for the whole first page
+# located in the 1st column below the 2 team plots
+# legend for fill:week map
+
+# get the current week, so only show up to this week
+max_wk <- max(df2l$wk_index)
+
+# create mostly barebones plot with this legend
+temp <- df2l %>%
+ggplot(aes(fct_rev(person), score, fill = week)) +
+  geom_bar(stat = "identity", position = position_stack(reverse = TRUE)) +
+  theme(legend.title = element_blank(),
+        legend.text = element_text(size = 14),
+        legend.position = "bottom") +
+  scale_fill_manual(values = colors9[1:max_wk])
+
+# extract just the legend with cowplot package
+# there are probably other ways to do this, but I've just done it this way before
+# when using cowplot to combine multiple plots with plot_grid()
+l <- cowplot::get_legend(temp)
+
+# need to wrap in plot_grid() and renderPlot to ouput correctly
+renderPlot(cowplot::plot_grid(l))
+
+# OLD: thought I needed to use fillCol at first, but I don't
+# leaving here as an example in case something like this is needed in the future
+# output$legend <- renderPlot({
+#   cowplot::plot_grid(l)
+# })
+# 
+# fillCol(plotOutput("legend", height = "100%"), height = 50)
+
+```
+
+Column {.tabset data-width=500}
+-----------------------------------------------------------------------
+
+### All Teams
+
+```{r, fig.height=12, fig.width = 6}
+
+# second column, on right-hand side of page
+# has two tabs to select from (shows one plot at a time, one plot per tab)
+# "All Teams" plot is the first plot (first tab)
+# shows all the teams at once in one horizontal bar chart
+# broken down by week, but not by bguys 
+# sorted from top scorer to bottom scorer
+
+renderPlot({
+
+  df2l %>%
+      filter(week %in% week_select()) %>%
+  ggplot(aes(fct_rev(person), score, fill = week)) +
+    geom_bar(stat = "identity", position = position_stack(reverse = TRUE)) +
+    coord_flip(ylim = c(0, max.team.score+5)) +
+    theme_bw() +
+    theme(legend.position = "none") +
+    scale_fill_manual(values = colors9) +
+    labs(x = NULL,
+         y = "Score")
+})
+
+
+```
+
+### All Bachelorette Contestants
+
+```{r, fig.height=12, fig.width = 6}
+
+# second tab shows all the bguys and their scores per week
+# sorted from top scorer to bottom scorer
+
+scoresl <- df.scores %>%
+  pivot_longer(matches("Week"), names_to = "week", values_to = "score")
+
+renderPlot({
+
+scoresl %>%
+    filter(week %in% week_select()) %>%
+ggplot(aes(reorder(Participant, Total), score, fill = week)) +
+  geom_bar(stat = "identity", position = position_stack(reverse = TRUE)) +
+  coord_flip(ylim = c(0, max.bguy.score+5)) +
+  theme_bw() +
+  theme(legend.position = "none") +
+  scale_fill_manual(values = colors9) +
+  labs(x = NULL,
+     y = "Score")
+})
+
+
+```
+
+# Line Chart
+## Sidebar {.sidebar data-width=160}
+
+
+<!-- #### **Person 1** -->
+```{r}
+
+# sidebar for second page
+# a select-multiple box, choose which teams to show
+
+selectInput(inputId = "people_select",
+            label = "People",
+            choices = sort(as.character(team.order)),
+            selected = sort(as.character(team.order)),
+            multiple = TRUE,
+            selectize = FALSE,
+            size = 17,
+            )
+
+```
+
+To select multiple people:<br>
+*shift+click* or<br>
+*cmd+click* (Mac) or<br>
+*ctrl+click* (Windows)<br><br>
+(default is all people)
+
+## {data-width="100%"}
+###
+```{r fig.height = 9, fig.width = 12}
+
+# plot team scores over time (week)
+# instead of legend, label the lines at the end of the last week
+
+# # get cumulative score across weeks
+df.lineplot <- df2l %>%
+  group_by(person, week, wk_index) %>%
+  summarise(score = sum(score)) %>%
+  group_by(person) %>%
+  mutate(total_score = cumsum(score))
+
+# will do x-axis as continuous, but then re-label to include the word "Week" 
+week.labels <- paste("Week", 1:max_wk)
+
+renderPlot({
+
+  # filter to selected teams
+  dfplot <- df.lineplot %>%
+    filter(person %in% people_select())
+
+  # could add names at left-hand side too
+  # dflab1 <- dfplot %>%
+  #   ungroup() %>%
+  #   filter(wk_index == min(wk_index))
+  
+  # add names at right-hand side instead of legend
+  dflab2 <- dfplot %>%
+    ungroup() %>%
+    filter(wk_index == max(wk_index))
+
+  # 
+  dfplot %>%
+    ggplot(aes(wk_index, total_score, color = person)) +
+    geom_line(aes(group = person), alpha = .8) +
+    geom_point(alpha = .5) +
+    # ggrepel::geom_text_repel(data = dflab,
+    #                          aes(label = person),
+    #                          nudge_x = .1) +
+    ggrepel::geom_text_repel(data = dflab2,
+                           aes(label = person),
+                           nudge_x = .1) +
+    scale_x_continuous(limits = c(.95, 2.2),
+                       breaks = c(1:max_wk), labels = week.labels) +
+    coord_cartesian(ylim = c(0, max.team.score+5)) +
+    theme_bw() +
+    theme(legend.position = "none",
+          panel.grid.minor.x = element_blank()) +
+    labs(y = "Score",
+         x = "Week")
+
+})
+
+
+# for testing:
+# dfplot <- df2l %>%
+#   group_by(person, week, wk_index) %>%
+#   summarise(score = sum(score)) %>%
+#   group_by(person) %>%
+#   mutate(total_score = cumsum(score))
+#
+# dflab1 <- dfplot %>%
+#   ungroup() %>%
+#   filter(wk_index == min(wk_index))
+# dflab2 <- dfplot %>%
+#   ungroup() %>%
+#   filter(wk_index == max(wk_index))
+#
+# dfplot %>%
+#   ggplot(aes(wk_index, total_score, color = person)) +
+#   geom_line(aes(group = person), alpha = .8) +
+#   geom_point(alpha = .5) +
+#   # ggrepel::geom_text_repel(data = dflab,
+#   #                          aes(label = person),
+#   #                          nudge_x = .1) +
+#   ggrepel::geom_text_repel(data = dflab2,
+#                          aes(label = person),
+#                          nudge_x = .1) +
+#   scale_x_continuous(limits = c(.8, 2.2),
+#                      breaks = c(1, 2), labels = c("Week 1", "Week 2")) +
+#   coord_cartesian(ylim = c(0, max.team.score+5)) +
+#   theme_bw() +
+#   theme(legend.position = "none",
+#         panel.grid.minor.x = element_blank()) +
+#   labs(y = "Score",
+#        x = "Week")
+
+```
+
+
+
+# Old Pretty Plot
+### Chart A
+
+```{r, fig.height=9, fig.width = 12}
+
+g1 <- ggplot(df.pick, aes(reorder(pick.label, n), n, fill = label2)) +
+  geom_bar(stat = "identity") +
+  theme_bw() +
+  scale_y_continuous(limits = c(0, 10.5),
+                     breaks = c(0,2,4,6,8,10), expand = c(0, 0)) +
+  coord_flip() +
+  theme(panel.grid.major.y = element_blank(),
+        panel.grid.minor = element_blank(),
+        legend.title = element_blank(),
+        legend.text = element_text(size = 13, margin = margin(4, 0, 4, 0)),
+        axis.text.x = element_text(size = 13),
+        # axis.text.y = element_(face = df.pick$font_face, colour = df.pick$font_color),
+        axis.text.y = element_markdown(size = 12),
+        axis.ticks.y = element_blank(),
+        axis.title.x = element_text(size = 13, margin = margin(10, 0, 0, 0)),
+        legend.position = c(.78, .5),
+        plot.title = element_markdown(size = 15),
+        plot.subtitle = element_markdown(size = 13)) +
+  scale_fill_manual(values = c("gray70", "dodgerblue3", "gold3"),
+                    guide = guide_legend(reverse = TRUE)) +
+  labs(x = NULL,
+       y = "Number of times picked",
+       title = "Aven, Erich, Nate, Jason, Zach, and **Tino** were the top picks",
+       subtitle = "**Tino** and **Mario** are the top scorers after Week 1")
+
+g1
+
+```
+
+
+
+```{r}
+ui <- fluidPage(
+)
+
+server <- function(input, output, session) {
+}
+
+shinyApp(ui, server)
+```
