@@ -4,6 +4,8 @@ output:
   flexdashboard::flex_dashboard:
     orientation: columns
     vertical_layout: fill
+editor_options: 
+  chunk_output_type: console
 runtime: shiny
 ---
 
@@ -20,26 +22,38 @@ library(shiny)
 
 # load data
   # sheet 1: includes each team, their picks, and their points
-  df.teams <- readxl::read_excel("Fantasy Bachelorette, 2022.xlsx")
+  df.teams <- readxl::read_excel("Fantasy Bachelorette, 2022_wk8.xlsx")
   
   # sheet 2: includes the bachelorette contestants and their points per week
-  df.scores <- readxl::read_excel("Fantasy Bachelorette, 2022.xlsx", sheet = 2)
+  df.scores <- readxl::read_excel("Fantasy Bachelorette, 2022_wk8.xlsx", sheet = 2)
   
-  # manually  track who was eliminated and when
-  # "eliminated" column is the week they were eliminated (as an integer),
-    # or 999 if not yet eliminated
-  df.elim <- data.frame(pick = df.scores$Participant,
-                      eliminated = 999)
-  elim.wk1 <- c("Roby", "Joey", "Justin Y.")
-  elim.wk2 <- c("Brandan", "Chris", "Colin", "John", " Jordan V.", "Justin B.",
-                "Matt", "Ryan")
-  # 2 column df, bachelorette contestant name, week they were eliminated
-  df.elim <- df.elim %>%
-    mutate(eliminated = case_when(
-      pick %in% elim.wk1 ~ 1,
-      pick %in% elim.wk2 ~ 2,
-      TRUE ~ eliminated
-    ))
+  # old, as of 2022-09-15
+  # # manually  track who was eliminated and when
+  # # "eliminated" column is the week they were eliminated (as an integer),
+  #   # or 999 if not yet eliminated
+  # df.elim <- data.frame(pick = df.scores$Participant,
+  #                     eliminated = 999)
+  # elim.wk1 <- c("Roby", "Joey", "Justin Y.")
+  # elim.wk2 <- c("Brandan", "Chris", "Colin", "John", " Jordan V.", "Justin B.",
+  #               "Matt", "Ryan")
+  # # 2 column df, bachelorette contestant name, week they were eliminated
+  # df.elim <- df.elim %>%
+  #   mutate(eliminated = case_when(
+  #     pick %in% elim.wk1 ~ 1,
+  #     pick %in% elim.wk2 ~ 2,
+  #     TRUE ~ eliminated
+  #   ))
+  
+  # automatically detect week each participant was eliminated
+    # pre-week 8, so all week 8 values NA, so if first NA is week 8, set to 999
+    # to indicate not yet eliminated
+  df.elim <- df.scores %>%
+    pivot_longer(-Participant) %>%
+    group_by(Participant) %>%
+    summarise(eliminated = detect_index(value, is.na) - 1) %>% 
+    mutate(eliminated = ifelse(eliminated == 7, 999, eliminated)) %>%
+    rename(pick = Participant)
+
   
 # clean and prep team data
   # get long df of each person's team
