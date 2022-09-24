@@ -82,17 +82,56 @@ library(shiny)
 
   # sort team scores from high to low total score
   team.order <- fct_reorder(team.scores$person, team.scores$score)
+  
+  
+  # df with stuff I want to format on
+  df.format <- df.scores %>%
+    select(pick = Participant, Total) %>%
+    left_join(df.elim, by = "pick") %>%
+    mutate(rank = rank(-Total, ties.method = "min"),
+           font_face = ifelse(rank <= 3, "bold", "plain"),
+           font_color = case_when(
+             rank == 1 ~ "#D6AF36", # gold
+             rank == 2 ~ "#A7A7AD", # silver
+             rank == 3 ~ "#A77044", # bronze
+             eliminated > 900 ~ "black",
+             TRUE ~ "gray65"
+           ),
+           pick.temp = ifelse(rank <= 3, paste0("**", pick, "**"), pick),
+           pick.label = glue("<span style='color:{font_color}'>{pick.temp}</span>")
+           ) %>%
+    select(-Total)
+  
+  df.format2 <- team.scores %>%
+    mutate(font_face = ifelse(rank <= 3, "bold", "plain"),
+           font_color = case_when(
+             rank == 1 ~ "#D6AF36", # gold
+             rank == 2 ~ "#A7A7AD", # silver
+             rank == 3 ~ "#A77044", # bronze
+             TRUE ~ "black"
+           ),
+           person.temp = ifelse(rank <= 3, paste0("**", person, "**"), person),
+           person.label = glue("<span style='color:{font_color}'>{person.temp}</span>")
+           ) %>%
+    select(-rank) %>%
+    rename(team.score = score)
 
   # create main df: 
     # long version of df2 (1 row per person/pick/week)
     # merge in elimination week data
   df2l <- df2 %>%
     pivot_longer(-c(person, pick, Total), names_to = "week", values_to = "score") %>%
-    left_join(df.elim) %>%
+    # left_join(df.elim) %>%
     mutate(pick = factor(pick, levels = levels(bguys.order)),
            person = factor(person, levels = team.order),
            wk_index = as.numeric(str_extract(week, "\\d"))) %>%
-    drop_na(score) # drop weeks that haven't happened yet (or person eliminated)
+    drop_na(score) %>% # drop weeks that haven't happened yet (or person eliminated)
+    left_join(df.format, by = "pick") %>%
+    left_join(df.format2, by = "person")
+  
+  # update score df
+  df.scores2 <- df.scores %>%
+    left_join(df.format, by = c("Participant" = "pick"))
 
 
 # define certain useful values like the max score, number of weeks so far
@@ -110,6 +149,24 @@ week.list <- df2l %>%
   # chose some color palette I found online that seemed OK for now
 colors9 <- c("#fd7f6f", "#7eb0d5", "#b2e061", "#bd7ebe", "#ffb55a", "#ffee65", "#beb9db", "#fdcce5", "#8bd3c7")
 names(colors9) <- paste("Week", 1:9)
+
+# plot themes 
+theme_bar <- function(){
+  theme_bw() +
+    theme(panel.grid.major.y = element_blank(),
+        panel.grid.minor = element_blank(),
+        legend.title = element_blank(),
+        legend.text = element_text(size = 13, margin = margin(4, 0, 4, 0)),
+        axis.text.x = element_text(size = 13),
+        # axis.text.y = element_(face = df.pick$font_face, colour = df.pick$font_color),
+        axis.text.y = element_markdown(size = 12),
+        axis.ticks.y = element_blank(),
+        axis.title.x = element_text(size = 13, margin = margin(10, 0, 0, 0)),
+        # legend.position = c(.78, .5),
+        plot.title = element_markdown(size = 15),
+        plot.subtitle = element_markdown(size = 13))
+}
+
 
 
 # old "pretty" plot data prep ####
@@ -153,7 +210,7 @@ df.pick <- pick.count %>%
 
 # Bar Charts
 
-## Sidebar {.sidebar data-width=150}
+## Sidebar {.sidebar data-width=160}
 
 
 <!-- #### **Person 1** -->
@@ -189,11 +246,26 @@ selectInput(inputId = "week_select",
 ```
 
 <!-- some example descriptive text, here just describes how to select multiple -->
-To select multiple weeks:<br>
-*shift+click* or<br>
-*cmd+click* (Mac) or<br>
-*ctrl+click* (Windows)<br><br>
-(default is all weeks)
+<!-- To select multiple weeks:<br> -->
+<!-- *shift+click* or<br> -->
+<!-- *cmd+click* (Mac) or<br> -->
+<!-- *ctrl+click* (Windows)<br><br> -->
+<!-- (default is all weeks) -->
+
+**Point system:**  
+
+**5** = group date invite  
+
+**10** = one-on-one date invite  
+
+**20** = rose during rose ceremony  
+
+**25** = one-on-one date rose  
+
+**30** =  group date rose  
+
+Various one-time bonus points  
+
 
 Column {data-width=500}
 -----------------------------------------------------------------------
@@ -237,14 +309,16 @@ renderPlot({
   df2l %>%
     filter(person == person1(),
            week %in% week_select()) %>%
-  ggplot(aes(pick, score, fill = week)) +
+  ggplot(aes(pick.label, score, fill = week)) +
     geom_bar(stat = "identity", position = position_stack(reverse = TRUE)) +
-    coord_flip(ylim = c(0, max.bguy.score+5)) +
-    theme_bw() +
+    geom_hline(yintercept=0, size = 1.2, color = "black") + 
+    coord_flip() +
+    scale_y_continuous(limits = c(-.1, 1.1*max.bguy.score), expand = c(0,0)) +
+    theme_bar() +
     theme(legend.position = "none") +
     scale_fill_manual(values = colors9) + 
     labs(x = NULL,
-         y = "Score",
+         y = NULL,
          title = paste0(person1(), "'s Team"),
          subtitle = paste(rank.label, "with", score.label, "points"))
 
@@ -258,26 +332,26 @@ renderPlot({
 #   pull(rank)
 # 
 #   rank.label <- paste(scales::ordinal(temp), "place")
-#   
+# 
 #   if(sum(team.scores$rank == temp) > 1){
 #     rank.label <- paste("Tied for", rank.label)
 #   }
-#   
+# 
 #   score.label <- team.scores %>%
 #     filter(person == team.order[1]) %>%
 #     pull(score)
 # 
-#   # looking at different color palettes
-#     # there is never anything I like
-#   colors.br <- RColorBrewer::brewer.pal("Set2", n = 12)
-#   
-#   RColorBrewer::display.brewer.pal("Blues", n = 5)
-#   RColorBrewer::display.brewer.pal("Oranges", n = 6)
-#   RColorBrewer::display.brewer.all()
-#   
-#   colors1 <- rev(RColorBrewer::brewer.pal("Blues", n = 5))
-#   colors2 <- rev(RColorBrewer::brewer.pal("Oranges", n = 6)[1:5])
-#   colors.BlO <- c(rbind(colors1, colors2))
+#   # # looking at different color palettes
+#   #   # there is never anything I like
+#   # colors.br <- RColorBrewer::brewer.pal("Set2", n = 12)
+#   # 
+#   # RColorBrewer::display.brewer.pal("Blues", n = 5)
+#   # RColorBrewer::display.brewer.pal("Oranges", n = 6)
+#   # RColorBrewer::display.brewer.all()
+#   # 
+#   # colors1 <- rev(RColorBrewer::brewer.pal("Blues", n = 5))
+#   # colors2 <- rev(RColorBrewer::brewer.pal("Oranges", n = 6)[1:5])
+#   # colors.BlO <- c(rbind(colors1, colors2))
 # 
 #   # some pastel paelette I found online
 #   colors9 <- c("#fd7f6f", "#7eb0d5", "#b2e061", "#bd7ebe", "#ffb55a", "#ffee65", "#beb9db", "#fdcce5", "#8bd3c7")
@@ -285,13 +359,13 @@ renderPlot({
 # 
 # df2l %>%
 #   mutate(week = factor(week)) %>%
-#   filter(person == team.order[1],
-#          week %in% "Week 2") %>%
-# ggplot(aes(pick, score, fill = week)) +
+#   filter(person == team.order[1]) %>%
+# ggplot(aes(pick.label, score, fill = week)) +
 #   geom_bar(stat = "identity", position = position_stack(reverse = TRUE)) +
 #   coord_flip(ylim = c(0, max.bguy.score+5)) +
-#   theme_bw() +
-#   theme(legend.title = element_blank()) +
+#   theme_bar() +
+#   # theme(legend.title = element_blank(),
+#   #       axis.text.y = element_markdown(size = 12)) +
 #   # scale_fill_brewer(type = "qual", palette = 3) +
 #   # scale_fill_manual(values = colors.BlO) +
 #   scale_fill_manual(values = colors9) +
@@ -348,22 +422,24 @@ renderPlot({
   df2l %>%
     filter(person == person2(),
            week %in% week_select()) %>%
-  ggplot(aes(pick, score, fill = week)) +
+  ggplot(aes(pick.label, score, fill = week)) +
     geom_bar(stat = "identity", position = position_stack(reverse = TRUE)) +
-    coord_flip(ylim = c(0, max.bguy.score+5)) +
-    theme_bw() +
+    geom_hline(yintercept=0, size = 1.2, color = "black") + 
+    coord_flip() +
+    scale_y_continuous(limits = c(-.1, 1.1*max.bguy.score), expand = c(0,0)) +
+    theme_bar() +
     theme(legend.position = "none") +
     scale_fill_manual(values = colors9) + 
     labs(x = NULL,
-         y = "Score",
-         title = paste0(person1(), "'s Team"),
+         y = NULL,
+         title = paste0(person2(), "'s Team"),
          subtitle = paste(rank.label, "with", score.label, "points"))
 
 })
 
 ```
 
-### {data-height=65}
+### {data-height=80}
 ```{r}
 
 # adds the legend for the whole first page
@@ -418,10 +494,13 @@ renderPlot({
 
   df2l %>%
       filter(week %in% week_select()) %>%
-  ggplot(aes(fct_rev(person), score, fill = week)) +
+    
+  ggplot(aes(reorder(person.label, team.score), score, fill = week)) +
     geom_bar(stat = "identity", position = position_stack(reverse = TRUE)) +
-    coord_flip(ylim = c(0, max.team.score+5)) +
-    theme_bw() +
+    geom_hline(yintercept=0, size = 1.2, color = "black") + 
+    coord_flip() +
+    scale_y_continuous(limits = c(-.1, 1.1*max.team.score), expand = c(0,0)) +
+    theme_bar() +
     theme(legend.position = "none") +
     scale_fill_manual(values = colors9) +
     labs(x = NULL,
@@ -438,19 +517,21 @@ renderPlot({
 # second tab shows all the bguys and their scores per week
 # sorted from top scorer to bottom scorer
 
-scoresl <- df.scores %>%
+scoresl <- df.scores2 %>%
   pivot_longer(matches("Week"), names_to = "week", values_to = "score")
 
 renderPlot({
 
 scoresl %>%
     filter(week %in% week_select()) %>%
-ggplot(aes(reorder(Participant, Total), score, fill = week)) +
+ggplot(aes(reorder(pick.label, Total), score, fill = week)) +
   geom_bar(stat = "identity", position = position_stack(reverse = TRUE)) +
-  coord_flip(ylim = c(0, max.bguy.score+5)) +
-  theme_bw() +
+  geom_hline(yintercept=0, size = 1.2, color = "black") + 
+  coord_flip() +
+  scale_y_continuous(limits = c(-.1, 1.1*max.bguy.score), expand = c(0,0)) +
+  theme_bar() +
   theme(legend.position = "none") +
-  scale_fill_manual(values = colors9) +
+  scale_fill_manual(values = colors9) + 
   labs(x = NULL,
      y = "Score")
 })
