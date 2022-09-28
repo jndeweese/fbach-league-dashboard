@@ -53,6 +53,10 @@ library(shiny)
     summarise(eliminated = detect_index(value, is.na) - 1) %>% 
     mutate(eliminated = ifelse(eliminated == 7, 999, eliminated)) %>%
     rename(pick = Participant)
+  
+  # specify exceptions
+  df.elim <- df.elim %>%
+    mutate(eliminated = ifelse(pick == "Aven", 999, eliminated))
 
   
 # clean and prep team data
@@ -150,6 +154,11 @@ week.list <- df2l %>%
 colors9 <- c("#fd7f6f", "#7eb0d5", "#b2e061", "#bd7ebe", "#ffb55a", "#ffee65", "#beb9db", "#fdcce5", "#8bd3c7")
 names(colors9) <- paste("Week", 1:9)
 
+# for the 17 teams
+  # https://sashamaps.net/docs/resources/20-colors/
+colors17 <- c('#e6194B', '#3cb44b', '#4363d8', '#f58231', '#911eb4', '#42d4f4', '#f032e6', '#ffe119', '#fabed4', '#469990', '#dcbeff', '#9A6324', '#800000', '#808000', '#ffd8b1', '#000075', '#a9a9a9')
+names(colors17) <- unique(df2$person)
+
 # plot themes 
 theme_bar <- function(){
   theme_bw() +
@@ -160,36 +169,13 @@ theme_bar <- function(){
         axis.text.x = element_text(size = 13),
         # axis.text.y = element_(face = df.pick$font_face, colour = df.pick$font_color),
         axis.text.y = element_markdown(size = 12),
-        axis.ticks.y = element_blank(),
+        axis.ticks = element_blank(),
         axis.title.x = element_text(size = 13, margin = margin(10, 0, 0, 0)),
         # legend.position = c(.78, .5),
-        plot.title = element_markdown(size = 15),
-        plot.subtitle = element_markdown(size = 13))
+        plot.title = element_markdown(size = 16),
+        plot.subtitle = element_markdown(size = 13),
+        panel.border = element_blank())
 }
-
-
-
-# old "pretty" plot data prep ####
-temp.wk1 <- df.scores %>%
-  select(pick = Participant, Total = `Week 1`)
-
-pick.count <- df %>%
-  count(pick) %>% 
-  right_join(temp.wk1) 
-
-df.pick <- pick.count %>%
-  mutate(n = replace_na(n, 0.04),
-         label = case_when(
-           Total == max(Total) ~ "Top Scorer",
-           Total == 0 ~ "Eliminated",
-           TRUE ~ "Still Around"
-         ),
-         label2 = paste0(label, " (", Total, " points)"),
-         font_face = ifelse(label == "Top Scorer", "bold", "plain"),
-         font_color = ifelse(label == "Eliminated", "gray50", "black"),
-         pick.temp = ifelse(label == "Top Scorer", paste0("**", pick, "**"), pick),
-         # pick.temp = ifelse(label == "Eliminated",  paste0("~~", pick, "~~"), pick),
-         pick.label = glue("<span style='color:{font_color}'>{pick.temp}</span>"))
 
 
 ```
@@ -264,13 +250,13 @@ selectInput(inputId = "week_select",
 
 **30** =  group date rose  
 
-Various one-time bonus points  
+**Various** one-time bonus points  
 
 
 Column {data-width=500}
 -----------------------------------------------------------------------
 
-### Team 1
+### 
 
 ```{r, fig.height = 5, fig.width = 10}
 
@@ -285,7 +271,7 @@ renderPlot({
     pull(rank)
 
   # turn rank into a label to use in the plot text, e.g. 1st place, 4th place
-  rank.label <- paste(scales::ordinal(temp), "place")
+  rank.label <- paste0("**", scales::ordinal(temp), "** place")
 
   # and "Tied for" if there is a tie for that ranking
   if(sum(team.scores$rank == temp) > 1){
@@ -320,7 +306,7 @@ renderPlot({
     labs(x = NULL,
          y = NULL,
          title = paste0(person1(), "'s Team"),
-         subtitle = paste(rank.label, "with", score.label, "points"))
+         subtitle = paste0(rank.label, " with **", score.label, "** points"))
 
 })
 
@@ -378,7 +364,7 @@ renderPlot({
 ```
 
 
-### Team 2
+### 
 
 ```{r fig.height = 5, fig.width = 10}
 
@@ -398,7 +384,7 @@ renderPlot({
     pull(rank)
 
   # turn rank into a label to use in the plot text, e.g. 1st place, 4th place
-  rank.label <- paste(scales::ordinal(temp), "place")
+  rank.label <- paste0("**", scales::ordinal(temp), "** place")
 
   # and "Tied for" if there is a tie for that ranking
   if(sum(team.scores$rank == temp) > 1){
@@ -433,7 +419,7 @@ renderPlot({
     labs(x = NULL,
          y = NULL,
          title = paste0(person2(), "'s Team"),
-         subtitle = paste(rank.label, "with", score.label, "points"))
+         subtitle = paste0(rank.label, " with **", score.label, "** points"))
 
 })
 
@@ -574,11 +560,18 @@ To select multiple people:<br>
 # instead of legend, label the lines at the end of the last week
 
 # # get cumulative score across weeks
-df.lineplot <- df2l %>%
-  group_by(person, week, wk_index) %>%
+  # includes clunky method to get people who have 0 players remaining
+  # to have 0 for the remaining weeks and same total score
+df.lineplot <-df2l %>%
+  group_by(person, week) %>%
   summarise(score = sum(score)) %>%
+  pivot_wider(names_from = week, values_from=score) %>%
+  pivot_longer(-person, names_to = "week", values_to = "score") %>%
+  mutate(score = replace_na(score, 0)) %>%
+  mutate(wk_index = as.numeric(str_extract(week, "\\d"))) %>%
   group_by(person) %>%
-  mutate(total_score = cumsum(score))
+  mutate(total_score = cumsum(score)) %>%
+  select(person, week, wk_index, score, total_score)
 
 # will do x-axis as continuous, but then re-label to include the word "Week" 
 week.labels <- paste("Week", 1:max_wk)
@@ -600,99 +593,116 @@ renderPlot({
     filter(wk_index == max(wk_index))
 
   # 
+  # dfplot %>%
+  #   ggplot(aes(wk_index, total_score, color = person)) +
+  #   geom_line(aes(group = person), alpha = .8) +
+  #   geom_point(alpha = .5) +
+  #   # ggrepel::geom_text_repel(data = dflab,
+  #   #                          aes(label = person),
+  #   #                          nudge_x = .1) +
+  #   ggrepel::geom_text_repel(data = dflab2,
+  #                          aes(label = person),
+  #                          nudge_x = .1) +
+  #   scale_x_continuous(limits = c(.95, 2.2),
+  #                      breaks = c(1:max_wk), labels = week.labels) +
+  #   coord_cartesian(ylim = c(0, max.team.score+5)) +
+  #   theme_bw() +
+  #   theme(legend.position = "none",
+  #         panel.grid.minor.x = element_blank()) +
+  #   labs(y = "Score",
+  #        x = "Week")
+  
   dfplot %>%
     ggplot(aes(wk_index, total_score, color = person)) +
-    geom_line(aes(group = person), alpha = .8) +
-    geom_point(alpha = .5) +
+    geom_line(aes(group = person), alpha = .8, size = .7) +
+    geom_point(alpha = .6, size = 3) +
     # ggrepel::geom_text_repel(data = dflab,
     #                          aes(label = person),
     #                          nudge_x = .1) +
     ggrepel::geom_text_repel(data = dflab2,
                            aes(label = person),
-                           nudge_x = .1) +
-    scale_x_continuous(limits = c(.95, 2.2),
+                           nudge_x = .1, size = 6) +
+    scale_x_continuous(limits = c(.95, max_wk+.5),
                        breaks = c(1:max_wk), labels = week.labels) +
     coord_cartesian(ylim = c(0, max.team.score+5)) +
+    scale_color_manual(values = colors17) +
     theme_bw() +
+    theme(panel.grid.major.x = element_blank(),
+          # panel.grid.major.y = element_line(color = "gray90"),
+          panel.grid.minor = element_blank(),
+          axis.text.x = element_text(size = 17),
+          axis.text.y = element_text(size = 16),
+          axis.ticks = element_blank(),
+          panel.border = element_blank(),
+          axis.line = element_line(color = "black", size = .3),
+          plot.title = element_markdown(size = 20)
+          ) +
     theme(legend.position = "none",
           panel.grid.minor.x = element_blank()) +
-    labs(y = "Score",
-         x = "Week")
+    labs(y = NULL,
+         x = NULL,
+         title = "Team scores over time") 
 
 })
 
 
-# for testing:
+
+# # for testing:
+#   # includes clunky method to get people who have 0 players remaining
+#   # to have 0 for the remaining weeks and same total score
 # dfplot <- df2l %>%
-#   group_by(person, week, wk_index) %>%
+#   group_by(person, week) %>%
 #   summarise(score = sum(score)) %>%
+#   pivot_wider(names_from = week, values_from=score) %>%
+#   pivot_longer(-person, names_to = "week", values_to = "score") %>%
+#   mutate(score = replace_na(score, 0)) %>%
+#   mutate(wk_index = as.numeric(str_extract(week, "\\d"))) %>%
 #   group_by(person) %>%
-#   mutate(total_score = cumsum(score))
-#
+#   mutate(total_score = cumsum(score)) %>%
+#   select(person, week, wk_index, score, total_score)
+# 
+# 
 # dflab1 <- dfplot %>%
 #   ungroup() %>%
 #   filter(wk_index == min(wk_index))
 # dflab2 <- dfplot %>%
 #   ungroup() %>%
 #   filter(wk_index == max(wk_index))
-#
+# 
+# 
 # dfplot %>%
 #   ggplot(aes(wk_index, total_score, color = person)) +
-#   geom_line(aes(group = person), alpha = .8) +
-#   geom_point(alpha = .5) +
+#   geom_line(aes(group = person), alpha = .8, size = .7) +
+#   geom_point(alpha = .6, size = 3) +
 #   # ggrepel::geom_text_repel(data = dflab,
 #   #                          aes(label = person),
 #   #                          nudge_x = .1) +
 #   ggrepel::geom_text_repel(data = dflab2,
 #                          aes(label = person),
-#                          nudge_x = .1) +
-#   scale_x_continuous(limits = c(.8, 2.2),
-#                      breaks = c(1, 2), labels = c("Week 1", "Week 2")) +
+#                          nudge_x = .1, size = 6) +
+#   scale_x_continuous(limits = c(.95, max_wk+.5),
+#                      breaks = c(1:max_wk), labels = paste0("Week", 1:max_wk)) +
 #   coord_cartesian(ylim = c(0, max.team.score+5)) +
+#   scale_color_manual(values = colors17) +
 #   theme_bw() +
+#   theme(panel.grid.major.x = element_blank(),
+#         # panel.grid.major.y = element_line(color = "gray90"),
+#         panel.grid.minor = element_blank(),
+#         axis.text.x = element_text(size = 13),
+#         axis.text.y = element_text(size = 14),
+#         axis.ticks = element_blank(),
+#         panel.border = element_blank(),
+#         axis.line = element_line(color = "black", size = .3),
+#         plot.title = element_markdown(size = 15)
+#         ) +
 #   theme(legend.position = "none",
 #         panel.grid.minor.x = element_blank()) +
-#   labs(y = "Score",
-#        x = "Week")
+#   labs(y = NULL,
+#        x = NULL,
+#        title = "Team scores over time")
+
 
 ```
-
-
-
-# Old Pretty Plot
-### Chart A
-
-```{r, fig.height=9, fig.width = 12}
-
-g1 <- ggplot(df.pick, aes(reorder(pick.label, n), n, fill = label2)) +
-  geom_bar(stat = "identity") +
-  theme_bw() +
-  scale_y_continuous(limits = c(0, 10.5),
-                     breaks = c(0,2,4,6,8,10), expand = c(0, 0)) +
-  coord_flip() +
-  theme(panel.grid.major.y = element_blank(),
-        panel.grid.minor = element_blank(),
-        legend.title = element_blank(),
-        legend.text = element_text(size = 13, margin = margin(4, 0, 4, 0)),
-        axis.text.x = element_text(size = 13),
-        # axis.text.y = element_(face = df.pick$font_face, colour = df.pick$font_color),
-        axis.text.y = element_markdown(size = 12),
-        axis.ticks.y = element_blank(),
-        axis.title.x = element_text(size = 13, margin = margin(10, 0, 0, 0)),
-        legend.position = c(.78, .5),
-        plot.title = element_markdown(size = 15),
-        plot.subtitle = element_markdown(size = 13)) +
-  scale_fill_manual(values = c("gray70", "dodgerblue3", "gold3"),
-                    guide = guide_legend(reverse = TRUE)) +
-  labs(x = NULL,
-       y = "Number of times picked",
-       title = "Aven, Erich, Nate, Jason, Zach, and **Tino** were the top picks",
-       subtitle = "**Tino** and **Mario** are the top scorers after Week 1")
-
-g1
-
-```
-
 
 
 ```{r}
